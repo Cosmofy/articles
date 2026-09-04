@@ -1,0 +1,128 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      REDIS_URL: redis://localhost:6379/0
+      OTEL_SDK_DISABLED: "true"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run tests
+        run: uv run pytest -v
+
+  deploy:
+    name: Deploy to Oracle Cloud
+    needs: pytest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: deploy-articles-production
+      cancel-in-progress: false
+    env:
+      APP_PATH: /home/ubuntu/services/articles
+      APP_PORT: "29403"
+      SERVICE: cosmofy-articles
+      PUBLIC_DOMAIN: articles.api.cosmofy.services.deployim.com
+      PUBLIC_HEALTH_URL: https://articles.api.cosmofy.services.deployim.com/health/ready
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure deployment SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/articles_deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/articles_deploy
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Rolling deployment
+        run: |
+          set -euo pipefail
+          for host in 147.5.108.22 150.230.27.121; do
+            ssh -i ~/.ssh/articles_deploy ubuntu@"$host" "mkdir -p '$APP_PATH'"
+            rsync -az --delete \
+              --exclude '.env' \
+              --exclude '.git' \
+              --exclude '.venv' \
+              --exclude '.pytest_cache' \
+              --exclude '__pycache__' \
+              -e 'ssh -i ~/.ssh/articles_deploy' \
+              ./ ubuntu@"$host":"$APP_PATH/"
+            ssh -i ~/.ssh/articles_deploy ubuntu@"$host" "
+              set -euo pipefail
+              cd '$APP_PATH'
+              ~/.local/bin/uv sync --locked --no-dev
+              sudo install -o root -g root -m 0644 deploy/cosmofy-articles.service /etc/systemd/system/cosmofy-articles.service
+              sudo install -o root -g root -m 0644 deploy/cosmofy-articles-otel.service /etc/systemd/system/cosmofy-articles-otel.service
+              sudo install -o root -g otelcol-contrib -m 0640 deploy/otel-collector.yaml /etc/otelcol-contrib/articles.yaml
+              sudo install -o root -g root -m 0644 deploy/articles.caddy /etc/caddy/sites/articles.api.cosmofy.services.deployim.com.caddy
+              sudo install -d -o otelcol-contrib -g otelcol-contrib -m 0750 /var/lib/otelcol-contrib/articles
+              test -s '$APP_PATH/.env'
+              sudo test -s /etc/cosmofy/articles-otel.env
+              sudo test -s /etc/caddy/certs/articles.api.cosmofy.services.deployim.com.crt
+              sudo test -s /etc/caddy/certs/articles.api.cosmofy.services.deployim.com.key
+              sudo bash -c 'set -a; . /etc/cosmofy/articles-otel.env; set +a; /usr/bin/otelcol-contrib validate --config=/etc/otelcol-contrib/articles.yaml'
+              sudo caddy validate --config /etc/caddy/Caddyfile
+              sudo systemctl daemon-reload
+              sudo systemctl enable cosmofy-articles.service
+              sudo systemctl enable cosmofy-articles-otel.service
+              sudo systemctl reload caddy
+              sudo systemctl restart cosmofy-articles-otel.service
+              for attempt in \$(seq 1 30); do
+                if curl -fsS --max-time 5 'http://127.0.0.1:13135/' >/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if ! curl -fsS --max-time 5 'http://127.0.0.1:13135/' >/dev/null; then
+                sudo journalctl -u cosmofy-articles-otel.service -n 100 --no-pager
+                exit 1
+              fi
+              sudo systemctl restart cosmofy-articles.service
+              for attempt in \$(seq 1 30); do
+                if curl -fsS --max-time 5 'http://127.0.0.1:$APP_PORT/health/ready' >/dev/null; then
+                  exit 0
+                fi
+                sleep 2
+              done
+              sudo journalctl -u cosmofy-articles.service -u cosmofy-articles-otel.service -n 100 --no-pager
+              exit 1
+            "
+            curl -fsS --resolve "$PUBLIC_DOMAIN:443:$host" \
+              --retry 3 --retry-all-errors --max-time 15 \
+              "https://$PUBLIC_DOMAIN/health/ready"
+          done
+
+      - name: Verify load-balanced service
+        run: curl -fsS --retry 5 --retry-all-errors --max-time 15 "$PUBLIC_HEALTH_URL"

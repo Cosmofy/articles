@@ -1,0 +1,28 @@
+[Unit]
+Description=Cosmofy Articles microservice
+After=network-online.target redis-server.service cosmofy-articles-otel.service
+Wants=network-online.target cosmofy-articles-otel.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/services/articles
+EnvironmentFile=/home/ubuntu/services/articles/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DEPLOYMENT_ENVIRONMENT=production
+ExecStart=/home/ubuntu/services/articles/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 29403 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1 --no-access-log
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+MemoryMax=1G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
