@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -91,8 +92,26 @@ def load_article_catalog(path: Path) -> ArticleCatalog:
     if not source_articles:
         raise Error(Code.INVALID_DATASET)
 
-    version = hashlib.sha256(source_bytes).hexdigest()
+    return build_article_catalog(source_articles)
+
+
+def build_article_catalog(source_articles: list[SourceArticle]) -> ArticleCatalog:
+    if not source_articles:
+        raise Error(Code.INVALID_DATASET)
+
     articles = [_normalize_article(article) for article in source_articles]
+    canonical_articles = [
+        article.model_dump(mode="json")
+        for article in sorted(articles, key=lambda article: str(article.id))
+    ]
+    canonical_bytes = json.dumps(
+        canonical_articles,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    version = hashlib.sha256(canonical_bytes).hexdigest()
     return ArticleCatalog(articles, version)
 
 

@@ -1,8 +1,12 @@
 import logging
+from asyncio import to_thread
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from redis import RedisError
+from turso_serverless import Error as TursoError
+
+from app.database import check_database
 
 router = APIRouter(prefix="/health", tags=["health"])
 logger = logging.getLogger(__name__)
@@ -38,12 +42,29 @@ async def ready(request: Request) -> JSONResponse:
             },
         )
 
+    try:
+        logger.info(
+            msg="checking turso readiness",
+            extra={"event": "articles.readiness.turso", "dependency": "articles:turso"},
+        )
+        turso_ready = await to_thread(check_database)
+    except TursoError, OSError:
+        turso_ready = False
+        logger.exception(
+            msg="turso readiness check failed",
+            extra={
+                "event": "articles.readiness.turso.failed",
+                "dependency": "articles:turso",
+            },
+        )
+
     catalog_ready = request.app.state.catalog.count > 0
     dependencies = {
         "catalog": "ok" if catalog_ready else "unavailable",
         "redis": "ok" if redis_ready else "unavailable",
+        "turso": "ok" if turso_ready else "unavailable",
     }
-    if redis_ready and catalog_ready:
+    if redis_ready and turso_ready and catalog_ready:
         return JSONResponse(
             status_code=200,
             content={

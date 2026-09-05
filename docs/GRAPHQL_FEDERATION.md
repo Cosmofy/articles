@@ -1,8 +1,8 @@
-# Java GraphQL federation contract
+# Java GraphQL integration contract
 
 ## Ownership
 
-Clients call Cosmofy's Java GraphQL federation. Java calls this service. Clients must not call this service directly.
+Clients call Cosmofy's ordinary Java GraphQL API. Java calls this REST service. Clients must not call this service directly.
 
 The Articles service owns catalog validation, deterministic IDs, filtering, pagination, Redis page caching, and Redis-backed rate limiting. Java must not connect to this service's Redis or read `articles.json` itself.
 
@@ -81,10 +81,10 @@ Successful list responses return `X-Cache: HIT` or `MISS`. Exact article respons
 
 ## GraphQL integration
 
-Preserve Livia's existing client-facing `articles` field and its current article fields. Add IDs and pagination through backward-compatible schema additions rather than breaking the existing iOS query. A suitable Federation 2 model is:
+Livia preserves the existing client-facing `articles` field and adds IDs and pagination through backward-compatible schema additions. Its ordinary GraphQL model is:
 
 ```graphql
-type Article @key(fields: "id") {
+type Article {
   id: ID!
   month: Int!
   year: Int!
@@ -108,4 +108,4 @@ type ArticleBanner {
 }
 ```
 
-Do not add duplicate Redis caching in Java. Forward W3C `traceparent`/`tracestate` and `x-request-id`, reuse Livia's managed HTTP client, map snake_case transport fields, and run Federation composition checks.
+Do not add duplicate Redis caching in Java. Forward W3C `traceparent`/`tracestate` and `x-request-id`, reuse Livia's managed HTTP client, and map snake_case transport fields. DGS federation schema transformation is disabled.

@@ -173,4 +173,25 @@ def test_health_endpoints() -> None:
     }
     assert ready.status_code == 200
     assert ready.json()["article_count"] == 27
-    assert ready.json()["dependencies"] == {"catalog": "ok", "redis": "ok"}
+    assert ready.json()["dependencies"] == {
+        "catalog": "ok",
+        "redis": "ok",
+        "turso": "ok",
+    }
+
+
+def test_readiness_fails_when_turso_is_unavailable() -> None:
+    with (
+        TestClient(app) as client,
+        patch("app.routers.health.check_database", side_effect=OSError("unavailable")),
+    ):
+        app.state.redis_client = AsyncMock()
+        app.state.redis_client.ping.return_value = True
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["dependencies"] == {
+        "catalog": "ok",
+        "redis": "ok",
+        "turso": "unavailable",
+    }
