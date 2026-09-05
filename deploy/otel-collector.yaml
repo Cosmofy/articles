@@ -75,8 +75,22 @@ exporters:
     raw_log: true
     sending_queue:
       enabled: true
+      storage: file_storage
       num_consumers: 2
       queue_size: 1000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 300s
+  otlphttp/loki:
+    endpoint: http://100.104.171.25:3100/otlp
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      num_consumers: 1
+      queue_size: 256
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 300s
 
 service:
   telemetry:
@@ -96,12 +110,17 @@ service:
       exporters:
         - awsxray
     logs:
-      receivers:
+      receivers: &articles_log_receivers
         - journald/articles
-      processors:
+      processors: &articles_log_processors
         - memory_limiter
         - transform/articles_logs
         - resource/articles
         - batch
       exporters:
         - awscloudwatchlogs
+    logs/loki:
+      receivers: *articles_log_receivers
+      processors: *articles_log_processors
+      exporters:
+        - otlphttp/loki
